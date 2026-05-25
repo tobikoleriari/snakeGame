@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Snake Game</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #111;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      font-family: monospace;
+      color: #00ff41;
+      user-select: none;
+    }
+
+    h1 { font-size: 1.8rem; letter-spacing: 0.2em; margin-bottom: 8px; }
+
+    #hud {
+      display: flex;
+      gap: 2rem;
+      margin-bottom: 10px;
+      font-size: 0.95rem;
+    }
+
+    #gameCanvas {
+      display: block;
+      border: 2px solid #00882a;
+    }
+
+    /* Overlay for start / game-over */
+    #overlay {
+      position: absolute;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      background: rgba(0,0,0,0.82);
+      inset: 0;
+    }
+
+    #overlay h2 { font-size: 2rem; letter-spacing: 0.15em; }
+    #overlay p  { font-size: 0.8rem; color: #00882a; }
+    #overlay .score { font-size: 1.4rem; color: #ffd700; }
+
+    button {
+      background: transparent;
+      color: #00ff41;
+      border: 1px solid #00882a;
+      padding: 8px 28px;
+      font-family: monospace;
+      font-size: 0.9rem;
+      cursor: pointer;
+      letter-spacing: 0.15em;
+    }
+    button:hover { background: #003d12; }
+
+    #footer { margin-top: 8px; font-size: 0.65rem; color: #003d12; }
+  </style>
+</head>
+<body>
+
+  <h1>SNAKE</h1>
+
+  <div id="hud">
+    <span>SCORE <strong id="scoreEl">0</strong></span>
+    <span>BEST  <strong id="bestEl">0</strong></span>
+    <span>LEVEL <strong id="levelEl">1</strong></span>
+  </div>
+
+  <!-- Canvas is wrapped so the overlay sits on top of it -->
+  <div style="position:relative;">
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="overlay">
+      <h2 id="overlayTitle">SNAKE</h2>
+      <p>ARROW KEYS / WASD TO MOVE</p>
+      <p id="overlayScore" class="score"></p>
+      <p id="overlayMsg"></p>
+      <button id="actionBtn">START</button>
+    </div>
+  </div>
+
+  <p id="footer">HTML5 CANVAS · GEOMETRY &amp; RASTERIZATION PIPELINE DEMO</p>
+
+<script>
+/* ================================================================
+   SNAKE — HTML5 Canvas Graphics Pipeline Demo
+   ----------------------------------------------------------------
+   Pipeline stages labelled throughout:
+     APPLICATION STAGE  — logic, input, state
+     GEOMETRY STAGE     — defining paths / shapes / vertices
+     RASTERIZATION STAGE — drawing pixels onto the canvas
+   ================================================================ */
+
+  // ── Setup ──────────────────────────────────────────────────────
+  const canvas = document.getElementById('gameCanvas');
+  const ctx    = canvas.getContext('2d');
+
+  const CELL = 20, COLS = 25, ROWS = 25;
+  canvas.width  = CELL * COLS;   // 500px
+  canvas.height = CELL * ROWS;   // 500px
+
+  // ── DOM refs ───────────────────────────────────────────────────
+  const scoreEl   = document.getElementById('scoreEl');
+  const bestEl    = document.getElementById('bestEl');
+  const levelEl   = document.getElementById('levelEl');
+  const overlay   = document.getElementById('overlay');
+  const titleEl   = document.getElementById('overlayTitle');
+  const scoreMsg  = document.getElementById('overlayScore');
+  const infoMsg   = document.getElementById('overlayMsg');
+  const actionBtn = document.getElementById('actionBtn');
+
+  // ══════════════════════════════════════════════════════════════
+  // APPLICATION STAGE — persistent state
+  // ══════════════════════════════════════════════════════════════
+  let snake, dir, nextDir, food, particles;
+  let score, best = 0, level, speed;
+  let loopId, animId, gameOver;
+
+  // ── Initialise / reset ────────────────────────────────────────
+  function init() {
+    // APPLICATION STAGE — reset all game variables
+    snake     = [{ x:12, y:12 }, { x:11, y:12 }, { x:10, y:12 }];
+    dir       = { x:1, y:0 };
+    nextDir   = { x:1, y:0 };
+    score     = 0;
+    level     = 1;
+    speed     = 140;
+    particles = [];
+    gameOver  = false;
+    placeFood();
+    updateHUD();
+  }
+
+  function placeFood() {
+    // APPLICATION STAGE — pick a random empty cell
+    do {
+      food = {
+        x: Math.floor(Math.random() * COLS),
+        y: Math.floor(Math.random() * ROWS)
+      };
+    } while (snake.some(s => s.x === food.x && s.y === food.y));
+  }
+
+  function updateHUD() {
+    scoreEl.textContent = score;
+    bestEl.textContent  = best;
+    levelEl.textContent = level;
+  }
+
+  // ── Input (APPLICATION STAGE) ─────────────────────────────────
+  document.addEventListener('keydown', e => {
+    const map = {
+      ArrowUp:    {x:0,y:-1}, w:{x:0,y:-1}, W:{x:0,y:-1},
+      ArrowDown:  {x:0,y: 1}, s:{x:0,y: 1}, S:{x:0,y: 1},
+      ArrowLeft:  {x:-1,y:0}, a:{x:-1,y:0}, A:{x:-1,y:0},
+      ArrowRight: {x: 1,y:0}, d:{x: 1,y:0}, D:{x: 1,y:0},
+    };
+    const nd = map[e.key];
+    if (nd && (nd.x !== -dir.x || nd.y !== -dir.y)) nextDir = nd;
+    if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) e.preventDefault();
+  });
+
+  // ── Tick (APPLICATION STAGE) ──────────────────────────────────
+  function tick() {
+    dir = nextDir;
+    const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+
+    // Wall / self collision
+    if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS
+        || snake.some(s => s.x === head.x && s.y === head.y)) {
+      endGame(); return;
+    }
+
+    snake.unshift(head);
+
+    if (head.x === food.x && head.y === food.y) {
+      // APPLICATION STAGE — score, level, particles
+      score += 10 * level;
+      if (score > best) best = score;
+      burst(food.x, food.y);
+      placeFood();
+      level = Math.floor(score / 50) + 1;
+      speed = Math.max(60, 140 - (level - 1) * 12);
+      clearInterval(loopId);
+      loopId = setInterval(tick, speed);
+    } else {
+      snake.pop();
+    }
+
+    updateHUD();
+  }
+
+  function endGame() {
+    // APPLICATION STAGE — stop loop, show overlay
+    clearInterval(loopId);
+    gameOver = true;
+    titleEl.textContent       = 'GAME OVER';
+    titleEl.style.color       = '#ff2d2d';
+    scoreMsg.textContent      = 'SCORE: ' + score;
+    infoMsg.textContent       = score >= best && score > 0 ? '★ NEW BEST ★' : '';
+    actionBtn.textContent     = 'PLAY AGAIN';
+    overlay.style.display     = 'flex';
+  }
+
+  // ── Particles ─────────────────────────────────────────────────
+  function burst(gx, gy) {
+    // APPLICATION STAGE — spawn particles at food position
+    const cx = gx * CELL + CELL / 2, cy = gy * CELL + CELL / 2;
+    for (let i = 0; i < 12; i++) {
+      const a = (Math.PI * 2 * i) / 12;
+      particles.push({
+        x: cx, y: cy,
+        vx: Math.cos(a) * (1.5 + Math.random() * 2.5),
+        vy: Math.sin(a) * (1.5 + Math.random() * 2.5),
+        life: 1.0
+      });
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // RENDER — called every animation frame
+  // ══════════════════════════════════════════════════════════════
+  function render() {
+    // RASTERIZATION STAGE — clear canvas with background colour
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    drawGrid();
+    drawFood();
+    drawSnake();
+    drawParticles();
+
+    requestAnimationFrame(render);
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // OBJECT 1: GRID
+  // ──────────────────────────────────────────────────────────────
+  function drawGrid() {
+    ctx.strokeStyle = '#1a2e1a';
+    ctx.lineWidth   = 0.5;
+    ctx.beginPath();
+
+    for (let x = 0; x <= COLS; x++) {
+      // GEOMETRY STAGE — vertical line vertices
+      ctx.moveTo(x * CELL, 0);
+      ctx.lineTo(x * CELL, canvas.height);
+    }
+    for (let y = 0; y <= ROWS; y++) {
+      // GEOMETRY STAGE — horizontal line vertices
+      ctx.moveTo(0, y * CELL);
+      ctx.lineTo(canvas.width, y * CELL);
+    }
+
+    // RASTERIZATION STAGE — stroke lines onto canvas pixels
+    ctx.stroke();
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // OBJECT 2: SNAKE
+  // ──────────────────────────────────────────────────────────────
+  function drawSnake() {
+    const pad = 2;
+
+    snake.forEach((seg, i) => {
+      const px = seg.x * CELL, py = seg.y * CELL;
+
+      if (i === 0) {
+        // HEAD — rounded rectangle
+        // GEOMETRY STAGE — define rounded-rect path
+        const r = 5, x = px+pad, y = py+pad, w = CELL-pad*2, h = CELL-pad*2;
+        ctx.beginPath();
+        ctx.moveTo(x+r, y);
+        ctx.lineTo(x+w-r, y);
+        ctx.arcTo(x+w, y,   x+w, y+r,   r);
+        ctx.lineTo(x+w, y+h-r);
+        ctx.arcTo(x+w, y+h, x+w-r, y+h, r);
+        ctx.lineTo(x+r, y+h);
+        ctx.arcTo(x, y+h,   x, y+h-r,   r);
+        ctx.lineTo(x, y+r);
+        ctx.arcTo(x, y,     x+r, y,      r);
+        ctx.closePath();
+
+        // RASTERIZATION STAGE — fill head
+        ctx.fillStyle  = '#80ffaa';
+        ctx.shadowBlur = 12;
+        ctx.shadowColor= '#00ff41';
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Eyes
+        drawEyes(seg);
+
+      } else {
+        // BODY — plain rectangle, colour fades toward tail
+        const t = i / snake.length;
+
+        // GEOMETRY STAGE — rectangle path for body segment
+        ctx.beginPath();
+        ctx.rect(px+pad, py+pad, CELL-pad*2, CELL-pad*2);
+
+        // RASTERIZATION STAGE — fill body segment
+        ctx.fillStyle = i % 2 === 0
+          ? `rgba(0,${Math.floor(200-t*70)},${Math.floor(55-t*25)},0.9)`
+          : `rgba(0,${Math.floor(175-t*70)},${Math.floor(45-t*25)},0.85)`;
+        ctx.fill();
+      }
+    });
+  }
+
+  function drawEyes(seg) {
+    const cx = seg.x * CELL + CELL/2, cy = seg.y * CELL + CELL/2;
+    const offsets = [
+      { ex:  dir.y*4 + dir.x*3, ey: -dir.x*4 + dir.y*3 },
+      { ex: -dir.y*4 + dir.x*3, ey:  dir.x*4 + dir.y*3 },
+    ];
+    offsets.forEach(o => {
+      // GEOMETRY STAGE — circle for eye white
+      ctx.beginPath();
+      ctx.arc(cx+o.ex, cy+o.ey, 2.5, 0, Math.PI*2);
+      // RASTERIZATION STAGE — fill eye
+      ctx.fillStyle = '#111';
+      ctx.fill();
+
+      // GEOMETRY STAGE — smaller circle for pupil
+      ctx.beginPath();
+      ctx.arc(cx+o.ex+dir.x, cy+o.ey+dir.y, 1.2, 0, Math.PI*2);
+      // RASTERIZATION STAGE — fill pupil
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // OBJECT 3: FOOD (pulsing diamond)
+  // ──────────────────────────────────────────────────────────────
+  function drawFood() {
+    const cx = food.x * CELL + CELL/2, cy = food.y * CELL + CELL/2;
+    const r  = CELL/2 - 3;
+    // APPLICATION STAGE — time-based pulse value
+    const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 250);
+
+    // GEOMETRY STAGE — diamond: 4 vertices at N/E/S/W
+    ctx.beginPath();
+    ctx.moveTo(cx,   cy-r);
+    ctx.lineTo(cx+r, cy  );
+    ctx.lineTo(cx,   cy+r);
+    ctx.lineTo(cx-r, cy  );
+    ctx.closePath();
+
+    // RASTERIZATION STAGE — radial gradient fill
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    g.addColorStop(0,   '#ffee88');
+    g.addColorStop(0.5, '#ff6b35');
+    g.addColorStop(1,   '#cc2200');
+    ctx.fillStyle   = g;
+    ctx.shadowBlur  = 16 * pulse;
+    ctx.shadowColor = 'rgba(255,100,50,0.7)';
+    ctx.fill();
+    ctx.shadowBlur  = 0;
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // OBJECT 4: PARTICLES (food burst)
+  // ──────────────────────────────────────────────────────────────
+  function drawParticles() {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+
+      // APPLICATION STAGE — update position & life
+      p.x    += p.vx;
+      p.y    += p.vy;
+      p.life -= 0.05;
+      if (p.life <= 0) { particles.splice(i, 1); continue; }
+
+      // GEOMETRY STAGE — small circle for each particle
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3 * p.life, 0, Math.PI*2);
+
+      // RASTERIZATION STAGE — fill particle with fading alpha
+      ctx.fillStyle = `rgba(255,160,50,${p.life})`;
+      ctx.fill();
+    }
+  }
+
+  // ── Button ────────────────────────────────────────────────────
+  actionBtn.onclick = () => {
+    overlay.style.display = 'none';
+    titleEl.style.color   = '#00ff41';
+    init();
+    clearInterval(loopId);
+    loopId = setInterval(tick, speed);
+  };
+
+  // ── Boot ──────────────────────────────────────────────────────
+  init();
+  render();   // starts the requestAnimationFrame loop
+
+</script>
+</body>
+</html>
